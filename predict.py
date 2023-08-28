@@ -9,7 +9,9 @@ from PIL import Image
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from PIL import Image, ImageFilter
 
+import base64
 import cv2
 import numpy as np
 import random
@@ -56,7 +58,7 @@ class Predictor(BasePredictor):
     def predict(
         self,
         image: Path = Input(description="Grayscale input image")
-    ) -> Path:
+    ) -> str:
         """Run a single prediction on the model"""
 
         # load image as <class 'PIL.Image.Image'>
@@ -138,15 +140,26 @@ class Predictor(BasePredictor):
         # Resize mask to match background image size
         mask = mask.resize(background.size)
 
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=7))
+
+
         # Apply the mask to the foreground image
         foreground.putalpha(mask)
+
 
         # Composite the images
         result = Image.alpha_composite(background, foreground)
 
         # Save the result
         result.save("output_with_overlay.png")
-                
+        
+        # convert to base64
+        with open("output_with_overlay.png", "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read())
+
+        # return base64 in an array
+        return [encoded_string.decode("utf-8")]
+
 
 
 
