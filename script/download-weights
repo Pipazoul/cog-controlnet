@@ -39,14 +39,17 @@ controlnet = ControlNetModel.from_pretrained(
 controlnet.save_pretrained(CONTROLNET_CACHE)
 
 pipe = DiffusionPipeline.from_pretrained(
-    MODEL_ID,
-    torch_dtype=torch.float16,
-    cache_dir=MODEL_ID_CACHE,
-)
-
+     MODEL_ID,
+     torch_dtype=torch.float16,
+     cache_dir=MODEL_ID_CACHE,
+    )
 pipe.save_pretrained(MODEL_ID_CACHE, safe_serialization=True)
+# if not os.path.exists(MODEL_ID_CACHE + "/realitycheckXL_alpha11.safetensors"):
+#     print("Downloading model realitycheckXL_alpha11 ")
+#     urllib.request.urlretrieve("https://stableai-space.fra1.digitaloceanspaces.com/models/sdxl_models/realitycheckXL_alpha11.safetensors", MODEL_ID_CACHE + "/realitycheckXL_alpha11.safetensors")
 
 #check if the file exists
 if not os.path.exists("selfie_multiclass_256x256.tflite"):
     # Download the file from `url` and save it locally under `file_name`:
+    print("Downloading selfie_multiclass_256x256.tflite")
     urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite", "selfie_multiclass_256x256.tflite")

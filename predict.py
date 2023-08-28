@@ -19,7 +19,7 @@ from cog import BasePredictor, Input, Path
 
 MODEL = "lllyasviel/ControlNet"
 CONTROLNET = "fusing/stable-diffusion-v1-5-controlnet-openpose"
-MODEL_ID = "runwayml/stable-diffusion-v1-5"
+MODEL_ID = "Lykon/AbsoluteReality"
 
 CONTROLNET_CACHE = "control-cache"
 MODEL_CACHE = "model-cache"
@@ -57,7 +57,9 @@ class Predictor(BasePredictor):
 
     def predict(
         self,
-        image: Path = Input(description="Grayscale input image")
+        prompt: str = Input(description="Prompt to generate images from"),
+        image: Path = Input(description="Grayscale input image"),
+        gaussian_radius: int = Input(description="Gaussian blur radius", default=7),
     ) -> str:
         """Run a single prediction on the model"""
 
@@ -115,11 +117,11 @@ class Predictor(BasePredictor):
 
         generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
         #generator = [torch.Generator(device="cpu").manual_seed(2)]
-        prompt = ["super-hero character, best quality, extremely detailed"]
+        input_prompt = [prompt]
         out = self.pipe(
-            prompt,
+            input_prompt,
             poses,
-            negative_prompt=["monochrome, lowres, bad anatomy, worst quality, low quality"],
+            negative_prompt=["naked, boobs, tits, nsfw, monochrome, lowres, bad anatomy, worst quality, low quality"],
             generator=generator,
             num_inference_steps=20,
         )
@@ -140,7 +142,7 @@ class Predictor(BasePredictor):
         # Resize mask to match background image size
         mask = mask.resize(background.size)
 
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=7))
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=gaussian_radius))
 
 
         # Apply the mask to the foreground image
@@ -158,7 +160,7 @@ class Predictor(BasePredictor):
             encoded_string = base64.b64encode(image_file.read())
 
         # return base64 in an array
-        return [encoded_string.decode("utf-8")]
+        return str([encoded_string.decode("utf-8")])
 
 
 
