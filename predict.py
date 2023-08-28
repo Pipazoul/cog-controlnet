@@ -108,6 +108,7 @@ class Predictor(BasePredictor):
 
             # save output image
             Image.fromarray(output_image).save("mask.png")
+
         
 
         generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
@@ -120,6 +121,32 @@ class Predictor(BasePredictor):
             generator=generator,
             num_inference_steps=20,
         )
-        out.images[0].save("output.png")
 
-        return Path("output.png")
+        # save output image
+        out_image = out.images[0]
+        out_image.save("output.png")
+
+        
+        # Load the images
+        foreground = Image.open("image.jpg").convert("RGBA")
+        background = Image.open("output.png").convert("RGBA")
+        mask = Image.open("mask.png").convert("L")  # Convert mask to grayscale
+
+        # Resize foreground to match background image size
+        foreground = foreground.resize(background.size)
+
+        # Resize mask to match background image size
+        mask = mask.resize(background.size)
+
+        # Apply the mask to the foreground image
+        foreground.putalpha(mask)
+
+        # Composite the images
+        result = Image.alpha_composite(background, foreground)
+
+        # Save the result
+        result.save("output_with_overlay.png")
+                
+
+
+
