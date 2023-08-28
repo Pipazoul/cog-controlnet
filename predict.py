@@ -1,216 +1,81 @@
 # Prediction interface for Cog ⚙️
-# https://github.com/replicate/cog/resolve/main/docs/python.md
+# https://github.com/replicate/cog/blob/main/docs/python.md
+import torch
+from diffusers.utils import load_image
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from diffusers import UniPCMultistepScheduler
+from controlnet_aux import OpenposeDetector
+from PIL import Image
 
 from cog import BasePredictor, Input, Path
-import os
-from subprocess import call
-from cldm.model import create_model, load_state_dict
-from ldm.models.diffusion.ddim import DDIMSampler
-from PIL import Image
-import numpy as np
-from typing import List
-from utils import get_state_dict_path, download_model, model_dl_urls, annotator_dl_urls
 
-MODEL_TYPE = "openpose"
+MODEL = "lllyasviel/ControlNet"
+CONTROLNET = "fusing/stable-diffusion-v1-5-controlnet-openpose"
+MODEL_ID = "runwayml/stable-diffusion-v1-5"
 
-if MODEL_TYPE == "canny":
-    from gradio_canny2image import process_canny
-elif MODEL_TYPE == "depth":
-    from gradio_depth2image import process_depth
-elif MODEL_TYPE == "hed":
-    from gradio_hed2image import process_hed
-elif MODEL_TYPE == "normal":
-    from gradio_normal2image import process_normal
-elif MODEL_TYPE == "mlsd":
-    from gradio_hough2image import process_mlsd
-elif MODEL_TYPE == "scribble":
-    from gradio_scribble2image import process_scribble
-elif MODEL_TYPE == "seg":
-    from gradio_seg2image import process_seg
-elif MODEL_TYPE == "openpose":
-    from gradio_pose2image import process_pose
+CONTROLNET_CACHE = "control-cache"
+MODEL_CACHE = "model-cache"
+MODEL_ID_CACHE = "model-id-cache"
+
 
 class Predictor(BasePredictor):
-    def setup(self):
+    def setup(self) -> None:
         """Load the model into memory to make running multiple predictions efficient"""
-        self.model = create_model('./models/cldm_v15.yaml').cuda()
-        self.model.load_state_dict(load_state_dict(get_state_dict_path(MODEL_TYPE), location='cuda'))
-        self.ddim_sampler = DDIMSampler(self.model)
+
+        # nvidia-smi
+        print("torch.cuda.is_available()", torch.cuda.is_available())
+        print("torch.cuda.device_count()", torch.cuda.device_count())
+        print("torch.cuda.current_device()", torch.cuda.current_device())
+        print("torch.cuda.get_device_name(0)", torch.cuda.get_device_name(0))
+
+        self.model = OpenposeDetector.from_pretrained(MODEL, cache_dir=MODEL_CACHE)
+        self.controlnet = ControlNetModel.from_pretrained(
+            CONTROLNET,
+            cache_dir=CONTROLNET_CACHE,
+            torch_dtype=torch.float16
+        )
+        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
+            MODEL_ID,
+            cache_dir=MODEL_ID_CACHE,
+            controlnet=self.controlnet,
+            torch_dtype=torch.float16,
+        )
+        self.pipe.to("cuda")
+        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
+        self.pipe.enable_model_cpu_offload()
+        self.pipe.enable_xformers_memory_efficient_attention()
+
+
 
     def predict(
         self,
-        image: Path = Input(description="Input image"),
-        prompt: str = Input(description="Prompt for the model"),
-        num_samples: str = Input(
-            description="Number of samples (higher values may OOM)",
-            choices=['1', '4'],
-            default='1'
-        ),
-        image_resolution: str = Input(
-            description="Image resolution to be generated",
-            choices = ['256', '512', '768'],
-            default='512'
-        ),
-        low_threshold: int = Input(description="Canny line detection low threshold", default=100, ge=1, le=255), # only applicable when model type is 'canny'
-        high_threshold: int = Input(description="Canny line detection high threshold", default=200, ge=1, le=255), # only applicable when model type is 'canny'
-        ddim_steps: int = Input(description="Steps", default=20),
-        scale: float = Input(description="Scale for classifier-free guidance", default=9.0, ge=0.1, le=30.0),
-        seed: int = Input(description="Seed", default=None),
-        eta: float = Input(description="Controls the amount of noise that is added to the input data during the denoising diffusion process. Higher value -> more noise", default=0.0),
-        a_prompt: str = Input(description="Additional text to be appended to prompt", default="best quality, extremely detailed"),
-        n_prompt: str = Input(description="Negative Prompt", default="longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality"),
-        detect_resolution: int = Input(description="Resolution at which detection method will be applied)", default=512, ge=128, le=1024), # only applicable when model type is 'HED', 'seg', or 'MLSD'
-        # bg_threshold: float = Input(description="Background Threshold (only applicable when model type is 'normal')", default=0.0, ge=0.0, le=1.0), # only applicable when model type is 'normal'
-        # value_threshold: float = Input(description="Value Threshold (only applicable when model type is 'MLSD')", default=0.1, ge=0.01, le=2.0), # only applicable when model type is 'MLSD'
-        # distance_threshold: float = Input(description="Distance Threshold (only applicable when model type is 'MLSD')", default=0.1, ge=0.01, le=20.0), # only applicable when model type is 'MLSD'
-    ) -> List[Path]:
+        image: str = Input(description="Grayscale input image")
+    ) -> Path:
         """Run a single prediction on the model"""
-        num_samples = int(num_samples)
-        image_resolution = int(image_resolution)
-        if not seed:
-            seed = np.random.randint(1000000)
-        else:
-            seed = int(seed)
+        # processed_input = preprocess(image)
+        # output = self.model(processed_image, scale)
+        # return postprocess(output)
+        print("input_image", image)
+        # Load the image
+        image = load_image(image)
+        #image = Image.open(image).convert("RGB")
 
-        # load input_image
-        input_image = Image.open(image)
-        # convert to numpy
-        input_image = np.array(input_image)
-
-        if MODEL_TYPE == "canny":
-            outputs = process_canny(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                low_threshold,
-                high_threshold,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "depth":
-            outputs = process_depth(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                detect_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "hed":
-            outputs = process_hed(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                detect_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "normal":
-            outputs = process_normal(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                bg_threshold,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "mlsd":
-            outputs = process_mlsd(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                detect_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                value_threshold,
-                distance_threshold,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "scribble":
-            outputs = process_scribble(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "seg":
-            outputs = process_seg(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                detect_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                self.model,
-                self.ddim_sampler,
-            )
-        elif MODEL_TYPE == "openpose":
-            outputs = process_pose(
-                input_image,
-                prompt,
-                a_prompt,
-                n_prompt,
-                num_samples,
-                image_resolution,
-                detect_resolution,
-                ddim_steps,
-                scale,
-                seed,
-                eta,
-                self.model,
-                self.ddim_sampler,
-            )
+        # resize the image to 512x512
+        image = image.resize((512, 512), Image.BICUBIC)
         
-        # outputs from list to PIL
-        outputs = [Image.fromarray(output) for output in outputs]
-        # save outputs to file
-        outputs = [output.save(f"tmp/output_{i}.png") for i, output in enumerate(outputs)]
-        # return paths to output files
-        return [Path(f"tmp/output_{i}.png") for i in range(len(outputs))]
+        poses = self.model(image)
+        
+
+        generator = torch.Generator("cuda").manual_seed(5)
+        #generator = [torch.Generator(device="cpu").manual_seed(2)]
+        prompt = ["super-hero character, best quality, extremely detailed"]
+        out = self.pipe(
+            prompt,
+            poses,
+            negative_prompt=["monochrome, lowres, bad anatomy, worst quality, low quality"],
+            generator=generator,
+            num_inference_steps=20,
+        )
+        out.images[0].save("output.png")
+
+        return Path("output.png")
