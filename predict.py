@@ -6,7 +6,13 @@ from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
 from diffusers import UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
 from PIL import Image
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
+import cv2
+import numpy as np
+import random
 from cog import BasePredictor, Input, Path
 
 MODEL = "lllyasviel/ControlNet"
@@ -49,24 +55,62 @@ class Predictor(BasePredictor):
 
     def predict(
         self,
-        image: str = Input(description="Grayscale input image")
+        image: Path = Input(description="Grayscale input image")
     ) -> Path:
         """Run a single prediction on the model"""
-        # processed_input = preprocess(image)
-        # output = self.model(processed_image, scale)
-        # return postprocess(output)
-        print("input_image", image)
-        # Load the image
-        image = load_image(image)
-        #image = Image.open(image).convert("RGB")
 
-        # resize the image to 512x512
-        image = image.resize((512, 512), Image.BICUBIC)
-        
-        poses = self.model(image)
+        # load image as <class 'PIL.Image.Image'>
+        pil_image = Image.open(image)
+
+        poses = self.model(pil_image)
+
+        #bg black
+        BG_COLOR = (0, 0, 0) # black
+        MASK_COLOR = (255, 255, 255) # white
+
+        # Create the options that will be used for ImageSegmenter
+        base_options = python.BaseOptions(model_asset_path='selfie_multiclass_256x256.tflite')
+        options = vision.ImageSegmenterOptions(base_options=base_options,
+                                            output_confidence_masks=True)
+
+        # Create the image segmenter
+        with vision.ImageSegmenter.create_from_options(options) as segmenter:
+            # Read the image to be processed
+            #TypeError: a bytes-like object is required, not 'Image'
+            image = open(image, 'rb').read()
+
+
+            # save image base64 to local
+            image = np.frombuffer(image, dtype=np.uint8)
+            image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+            image_file_name = 'image.jpg'
+            cv2.imwrite(image_file_name, image)
+
+            # Create the MediaPipe image file that will be segmented
+            image = mp.Image.create_from_file(image_file_name)
+
+            # Retrieve the masks for the segmented image
+            segmentation_result = segmenter.segment(image)
+            category_mask = segmentation_result.confidence_masks[3]
+            
+            #print(category_mask)
+
+            # Generate solid color images for showing the output segmentation mask.
+            image_data = image.numpy_view()
+            fg_image = np.zeros(image_data.shape, dtype=np.uint8)
+            fg_image[:] = MASK_COLOR
+            bg_image = np.zeros(image_data.shape, dtype=np.uint8)
+            bg_image[:] = BG_COLOR
+
+            condition = np.stack((category_mask.numpy_view(),) * 3, axis=-1) > 0.2
+            output_image = np.where(condition, fg_image, bg_image)
+
+
+            # save output image
+            Image.fromarray(output_image).save("mask.png")
         
 
-        generator = torch.Generator("cuda").manual_seed(5)
+        generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
         #generator = [torch.Generator(device="cpu").manual_seed(2)]
         prompt = ["super-hero character, best quality, extremely detailed"]
         out = self.pipe(

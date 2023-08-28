@@ -8,6 +8,7 @@ from diffusers import UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
 import os
 import sys
+import urllib
 
 # append project directory to path so predict.py can be imported
 sys.path.append('.')
@@ -45,4 +46,7 @@ pipe = DiffusionPipeline.from_pretrained(
 
 pipe.save_pretrained(MODEL_ID_CACHE, safe_serialization=True)
 
-
+#check if the file exists
+if not os.path.exists("selfie_multiclass_256x256.tflite"):
+    # Download the file from `url` and save it locally under `file_name`:
+    urllib.request.urlretrieve("https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite", "selfie_multiclass_256x256.tflite")
