@@ -1,0 +1,6 @@
+services:
+  cog-runpod:
+    image: yassinsiouda/cog-controlnet:runpod
+    build: 
+      context: .
+      dockerfile: Dockerfile
