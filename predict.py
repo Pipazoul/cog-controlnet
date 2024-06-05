@@ -6,16 +6,20 @@ from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
 from diffusers import UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
 from PIL import Image
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
-from PIL import Image, ImageFilter
+
+import insightface
+import onnxruntime
+from insightface.app import FaceAnalysis
+import cv2
+import gfpgan
 
 import base64
 import cv2
 import numpy as np
 import random
 from cog import BasePredictor, Input, Path
+import tempfile
+import time
 
 MODEL = "lllyasviel/ControlNet"
 CONTROLNET = "fusing/stable-diffusion-v1-5-controlnet-openpose"
@@ -54,69 +58,75 @@ class Predictor(BasePredictor):
         self.pipe.enable_xformers_memory_efficient_attention()
 
 
+        self.face_swapper = insightface.model_zoo.get_model('cache/inswapper_128.onnx', providers=onnxruntime.get_available_providers())
+        self.face_enhancer = gfpgan.GFPGANer(model_path='cache/GFPGANv1.4.pth', upscale=1)
+        self.face_analyser = FaceAnalysis(name='buffalo_l')
+        self.face_analyser.prepare(ctx_id=0, det_size=(640, 640))
+    
+    def get_faces(self, img_data):
+        analysed = self.face_analyser.get(img_data)
+        if not analysed:
+            print("No faces found")
+            return []
+        return analysed
+
+    def swap(self, target_image: Path, swap_image: Path) -> Path:
+        try:
+            target_frame = cv2.imread(str(target_image))
+            swap_frame = cv2.imread(str(swap_image))
+            target_faces = self.get_faces(target_frame)
+            swap_faces = self.get_faces(swap_frame)
+
+            if not target_faces or not swap_faces:
+                print("No faces to process.")
+                return None
+
+            for i, target_face in enumerate(target_faces):
+                try:
+                    source_face = swap_faces[i % len(swap_faces)]
+                    print("Swapping face")
+                    swapped_frame = self.face_swapper.get(target_frame, target_face, source_face, paste_back=True)
+                    if swapped_frame is not None:
+                        target_frame = swapped_frame
+                    else:
+                        print("Swapping failed for one face, continuing with others.")
+                except Exception as swap_error:
+                    print(f"Error during individual face swap: {swap_error}")
+                    continue  # Skip to the next face if the current one fails
+            
+            # save the swapped frame
+            cv2.imwrite("swapped.jpg", target_frame)
+
+            return "swapped.jpg"
+
+
+            print("Enhancing frame")
+            enhanced_frame, _, _ = self.face_enhancer.enhance(target_frame, paste_back=True)
+            out_path = Path(tempfile.mkdtemp()) / f"{str(int(time.time()))}.jpg"
+            cv2.imwrite(str(out_path), enhanced_frame)
+            return out_path
+
+        except Exception as e:
+            print(f"Error during face swapping: {e}")
+            return None
+
 
     def predict(
-        self,
-        prompt: str = Input(description="Prompt to generate images from"),
-        image: Path = Input(description="Grayscale input image"),
-        gaussian_radius: int = Input(description="Gaussian blur radius", default=7),
-    ) -> str:
+    self,
+    prompt: str = Input(description="Prompt to generate images from"),
+    image: Path = Input(description="Grayscale input image"),
+    gaussian_radius: int = Input(description="Gaussian blur radius", default=7),
+) -> str:
         """Run a single prediction on the model"""
 
         # load image as <class 'PIL.Image.Image'>
         pil_image = Image.open(image)
 
+        # Get poses using the Openpose model
         poses = self.model(pil_image)
 
-        #bg black
-        BG_COLOR = (0, 0, 0) # black
-        MASK_COLOR = (255, 255, 255) # white
-
-        # Create the options that will be used for ImageSegmenter
-        base_options = python.BaseOptions(model_asset_path='selfie_multiclass_256x256.tflite')
-        options = vision.ImageSegmenterOptions(base_options=base_options,
-                                            output_confidence_masks=True)
-
-        # Create the image segmenter
-        with vision.ImageSegmenter.create_from_options(options) as segmenter:
-            # Read the image to be processed
-            #TypeError: a bytes-like object is required, not 'Image'
-            image = open(image, 'rb').read()
-
-
-            # save image base64 to local
-            image = np.frombuffer(image, dtype=np.uint8)
-            image = cv2.imdecode(image, cv2.IMREAD_COLOR)
-            image_file_name = 'image.jpg'
-            cv2.imwrite(image_file_name, image)
-
-            # Create the MediaPipe image file that will be segmented
-            image = mp.Image.create_from_file(image_file_name)
-
-            # Retrieve the masks for the segmented image
-            segmentation_result = segmenter.segment(image)
-            category_mask = segmentation_result.confidence_masks[3]
-            
-            #print(category_mask)
-
-            # Generate solid color images for showing the output segmentation mask.
-            image_data = image.numpy_view()
-            fg_image = np.zeros(image_data.shape, dtype=np.uint8)
-            fg_image[:] = MASK_COLOR
-            bg_image = np.zeros(image_data.shape, dtype=np.uint8)
-            bg_image[:] = BG_COLOR
-
-            condition = np.stack((category_mask.numpy_view(),) * 3, axis=-1) > 0.2
-            output_image = np.where(condition, fg_image, bg_image)
-
-
-            # save output image
-            Image.fromarray(output_image).save("mask.png")
-
-        
-
+        # Generate the initial image based on the prompt and poses
         generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
-        #generator = [torch.Generator(device="cpu").manual_seed(2)]
         input_prompt = [prompt]
         out = self.pipe(
             input_prompt,
@@ -125,43 +135,24 @@ class Predictor(BasePredictor):
             generator=generator,
             num_inference_steps=20,
         )
+        out_image = out.images[0]
 
         # save output image
         out_image = out.images[0]
         out_image.save("output.png")
 
-        
-        # Load the images
-        foreground = Image.open("image.jpg").convert("RGBA")
-        background = Image.open("output.png").convert("RGBA")
-        mask = Image.open("mask.png").convert("L")  # Convert mask to grayscale
+        # swap faces
+        swapped_image = self.swap("output.png", image)
 
-        # Resize foreground to match background image size
-        foreground = foreground.resize(background.size)
+        if swapped_image:
+             # convert to base64
+            with open(swapped_image, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read())
 
-        # Resize mask to match background image size
-        mask = mask.resize(background.size)
+            # return base64 in an array
+            return str([encoded_string.decode("utf-8")])
+        else:
+            with open("output.png", "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read())
 
-        mask = mask.filter(ImageFilter.GaussianBlur(radius=gaussian_radius))
-
-
-        # Apply the mask to the foreground image
-        foreground.putalpha(mask)
-
-
-        # Composite the images
-        result = Image.alpha_composite(background, foreground)
-
-        # Save the result
-        result.save("output_with_overlay.png")
-        
-        # convert to base64
-        with open("output_with_overlay.png", "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read())
-
-        # return base64 in an array
-        return str([encoded_string.decode("utf-8")])
-
-
-
-
+            return str([encoded_string.decode("utf-8")])
