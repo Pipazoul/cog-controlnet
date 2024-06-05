@@ -58,7 +58,7 @@ class Predictor(BasePredictor):
         self.pipe.enable_xformers_memory_efficient_attention()
 
 
-        self.face_swapper = insightface.model_zoo.get_model('cache/inswapper_128.onnx', providers=onnxruntime.get_available_providers())
+        self.face_swapper = insightface.model_zoo.get_model('cache/inswapper_128.onnx')
         self.face_enhancer = gfpgan.GFPGANer(model_path='cache/GFPGANv1.4.pth', upscale=1)
         self.face_analyser = FaceAnalysis(name='buffalo_l')
         self.face_analyser.prepare(ctx_id=0, det_size=(640, 640))
