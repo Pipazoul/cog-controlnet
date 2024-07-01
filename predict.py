@@ -121,18 +121,20 @@ class Predictor(BasePredictor):
             print(f"Error during face swapping: {e}")
             return None
 
-    def extract_and_merge_faces(self, input_image: Image, output_image: Image, gaussian_radius: int, face_opacity: float = 0.8) -> Image:
+    def extract_and_merge_faces(self, input_image: Image, output_image: Image, gaussian_radius: int, face_opacity: float = 0.8, face_blur: int = 0) -> Image:
         """
-        Extract faces from the input image and merge them with the output image using face landmarks.
+        Extract faces from both input and output images, then merge them by placing the input face 
+        into the mask of the output image face, with options for face opacity and blur.
         
         Args:
         input_image (PIL.Image): The original input image
         output_image (PIL.Image): The generated output image
-        gaussian_radius (int): The radius for Gaussian blur
+        gaussian_radius (int): The radius for Gaussian blur on the mask edges
         face_opacity (float): Opacity of the face overlay (0.0 to 1.0, default is 0.8)
+        face_blur (int): Radius for Gaussian blur applied to the pasted faces (0 for no blur)
 
         Returns:
-        PIL.Image: The merged image with faces from the input image
+        PIL.Image: The merged image with faces from the input image placed on the output image
         """
         # Create the options for ImageSegmenter
         base_options = python.BaseOptions(model_asset_path='selfie_multiclass_256x256.tflite')
@@ -153,36 +155,58 @@ class Predictor(BasePredictor):
             if len(output_np.shape) == 2:
                 output_np = cv2.cvtColor(output_np, cv2.COLOR_GRAY2BGR)
 
-            # Create the MediaPipe image that will be segmented
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=input_np)
+            # Create MediaPipe images for both input and output
+            mp_input_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=input_np)
+            mp_output_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=output_np)
 
-            # Retrieve the masks for the segmented image
-            segmentation_result = segmenter.segment(mp_image)
-            category_mask = segmentation_result.confidence_masks[3]  # Assuming index 3 is for face
+            # Retrieve the masks for both segmented images
+            input_segmentation_result = segmenter.segment(mp_input_image)
+            output_segmentation_result = segmenter.segment(mp_output_image)
+            
+            input_face_mask = input_segmentation_result.confidence_masks[3].numpy_view()  # Assuming index 3 is for face
+            output_face_mask = output_segmentation_result.confidence_masks[3].numpy_view()
 
-            # Generate mask
-            mask = (category_mask.numpy_view() > 0.2).astype(np.float32)
-            mask = cv2.resize(mask, (target_shape[1], target_shape[0]))
+            # Generate masks
+            input_mask = (input_face_mask > 0.2).astype(np.float32)
+            output_mask = (output_face_mask > 0.2).astype(np.float32)
 
-            # Apply Gaussian blur to the mask
-            mask = cv2.GaussianBlur(mask, (gaussian_radius*2+1, gaussian_radius*2+1), 0)
+            # Resize masks
+            input_mask = cv2.resize(input_mask, (target_shape[1], target_shape[0]))
+            output_mask = cv2.resize(output_mask, (target_shape[1], target_shape[0]))
 
-            # Expand mask to 3 channels
-            mask_3channel = np.stack([mask] * 3, axis=-1)
+            # Apply Gaussian blur to the masks
+            input_mask = cv2.GaussianBlur(input_mask, (gaussian_radius*2+1, gaussian_radius*2+1), 0)
+            output_mask = cv2.GaussianBlur(output_mask, (gaussian_radius*2+1, gaussian_radius*2+1), 0)
+
+            # Expand masks to 3 channels
+            input_mask_3channel = np.stack([input_mask] * 3, axis=-1)
+            output_mask_3channel = np.stack([output_mask] * 3, axis=-1)
 
             # Ensure all arrays are float32
             input_np = input_np.astype(np.float32) / 255.0
             output_np = output_np.astype(np.float32) / 255.0
-            mask_3channel = mask_3channel.astype(np.float32)
+            input_mask_3channel = input_mask_3channel.astype(np.float32)
+            output_mask_3channel = output_mask_3channel.astype(np.float32)
 
-            # Apply face opacity
-            mask_3channel *= face_opacity
+            # Apply face blur if specified
+            if face_blur > 0:
+                blurred_input = cv2.GaussianBlur(input_np, (face_blur*2+1, face_blur*2+1), 0)
+                input_np = blurred_input * input_mask_3channel + input_np * (1 - input_mask_3channel)
 
-            # Blend images
-            merged = input_np * mask_3channel + output_np * (1 - mask_3channel)
+            # Create a combined mask that is the intersection of input and output face masks
+            combined_mask = input_mask_3channel * output_mask_3channel
+
+            # Apply face opacity to the input face, but only within the output face area
+            face_overlay = input_np * combined_mask * face_opacity
+
+            # Blend the face overlay with the output image
+            blended = face_overlay + output_np * (1 - combined_mask * face_opacity)
+
+            # For areas outside the combined mask, use the output image
+            final_result = blended * output_mask_3channel + output_np * (1 - output_mask_3channel)
 
             # Convert back to uint8 and then to PIL Image
-            merged_uint8 = (merged * 255).astype(np.uint8)
+            merged_uint8 = (final_result * 255).astype(np.uint8)
             merged_pil = Image.fromarray(merged_uint8, 'RGB')
 
             # Save the merged image
@@ -193,8 +217,9 @@ class Predictor(BasePredictor):
     self,
     prompt: str = Input(description="Prompt to generate images from"),
     image: Path = Input(description="Grayscale input image"),
-    gaussian_radius: int = Input(description="Gaussian blur radius", default=6),
+    gaussian_radius: int = Input(description="Gaussian blur radius", default=8),
     face_opacity: float = Input(description="Opacity of the face overlay (0.0 to 1.0)", default=0.7),
+    face_blur: int = Input(description="Radius for Gaussian blur applied to the pasted faces (0 for no blur)", default=1),
 ) -> str:
         """Run a single prediction on the model"""
 
@@ -225,7 +250,7 @@ class Predictor(BasePredictor):
 
 
         #merge image
-        merged_image = self.extract_and_merge_faces(pil_image, out_image, gaussian_radius, face_opacity)
+        merged_image = self.extract_and_merge_faces(pil_image, out_image, gaussian_radius, face_opacity, face_blur)
 
 
         # swap faces
@@ -233,10 +258,10 @@ class Predictor(BasePredictor):
         #swapped_image = self.swap("output.png", image)
 
         # correct faces with gfpgan
-        swapped_image = self.face_enhancer.enhance("swapped.jpg", paste_back=True)
+        _, _, swapped_image = self.face_enhancer.enhance(swapped_image, paste_back=True)
 
         # save the final image
-        cv2.imwrite("esrghan.png", swapped_image)
+        cv2.imwrite("final.jpg", swapped_image)
 
         if swapped_image:
              # convert to base64
