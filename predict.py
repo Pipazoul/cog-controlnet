@@ -81,6 +81,21 @@ class Predictor(BasePredictor):
             return []
         return analysed
 
+
+    def get_nearest_face(self, faces, target_face):
+        min_distance = float('inf')
+        nearest_face = None
+        target_bbox = target_face.bbox
+        target_center = (target_bbox[0] + target_bbox[2] / 2, target_bbox[1] + target_bbox[3] / 2)
+        for face in faces:
+            face_bbox = face.bbox
+            face_center = (face_bbox[0] + face_bbox[2] / 2, face_bbox[1] + face_bbox[3] / 2)
+            distance = ((target_center[0] - face_center[0]) ** 2 + (target_center[1] - face_center[1]) ** 2) ** 0.5
+            if distance < min_distance:
+                min_distance = distance
+                nearest_face = face
+        return nearest_face
+
     def swap(self, target_image: Path, swap_image: Path) -> Path:
         try:
             target_frame = cv2.imread(str(target_image))
@@ -94,7 +109,7 @@ class Predictor(BasePredictor):
 
             for i, target_face in enumerate(target_faces):
                 try:
-                    source_face = swap_faces[i % len(swap_faces)]
+                    source_face = self.get_nearest_face(swap_faces, target_face)
                     print("Swapping face")
                     swapped_frame = self.face_swapper.get(target_frame, target_face, source_face, paste_back=True)
                     if swapped_frame is not None:
