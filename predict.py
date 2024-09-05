@@ -19,7 +19,7 @@ import onnxruntime
 from insightface.app import FaceAnalysis
 import cv2
 import gfpgan
-
+import os
 
 import base64
 import cv2
@@ -48,6 +48,8 @@ class Predictor(BasePredictor):
         print("torch.cuda.current_device()", torch.cuda.current_device())
         print("torch.cuda.get_device_name(0)", torch.cuda.get_device_name(0))
 
+        self.face_enhancer = gfpgan.GFPGANer(model_path="cache/GFPGANv1.4.pth", upscale=1)
+
         self.model = OpenposeDetector.from_pretrained(MODEL, cache_dir=MODEL_CACHE)
         self.controlnet = ControlNetModel.from_pretrained(
             CONTROLNET,
@@ -67,7 +69,6 @@ class Predictor(BasePredictor):
 
 
         self.face_swapper = insightface.model_zoo.get_model('cache/inswapper_128.onnx')
-        self.face_enhancer = gfpgan.GFPGANer(model_path='cache/GFPGANv1.4.pth', upscale=1)
         self.face_analyser = FaceAnalysis(name='buffalo_l')
         self.face_analyser.prepare(ctx_id=0, det_size=(640, 640))
 
@@ -125,6 +126,7 @@ class Predictor(BasePredictor):
         """
         Extract faces from both input and output images, then merge them by placing the input face 
         into the mask of the output image face, with options for face opacity and blur.
+        Now includes color correction to match input face colors to output face colors.
         
         Args:
         input_image (PIL.Image): The original input image
@@ -134,7 +136,7 @@ class Predictor(BasePredictor):
         face_blur (int): Radius for Gaussian blur applied to the pasted faces (0 for no blur)
 
         Returns:
-        PIL.Image: The merged image with faces from the input image placed on the output image
+        PIL.Image: The merged image with color-corrected faces from the input image placed on the output image
         """
         # Create the options for ImageSegmenter
         base_options = python.BaseOptions(model_asset_path='selfie_multiclass_256x256.tflite')
@@ -188,16 +190,29 @@ class Predictor(BasePredictor):
             input_mask_3channel = input_mask_3channel.astype(np.float32)
             output_mask_3channel = output_mask_3channel.astype(np.float32)
 
+            # Color correction
+            input_face = input_np * input_mask_3channel
+            output_face = output_np * output_mask_3channel
+
+            # Calculate mean and std for both input and output faces
+            input_mean = np.mean(input_face[input_mask_3channel > 0], axis=0)
+            input_std = np.std(input_face[input_mask_3channel > 0], axis=0)
+            output_mean = np.mean(output_face[output_mask_3channel > 0], axis=0)
+            output_std = np.std(output_face[output_mask_3channel > 0], axis=0)
+
+            # Apply color correction
+            corrected_input = ((input_np - input_mean) / input_std * output_std + output_mean).clip(0, 1)
+
             # Apply face blur if specified
             if face_blur > 0:
-                blurred_input = cv2.GaussianBlur(input_np, (face_blur*2+1, face_blur*2+1), 0)
-                input_np = blurred_input * input_mask_3channel + input_np * (1 - input_mask_3channel)
+                blurred_input = cv2.GaussianBlur(corrected_input, (face_blur*2+1, face_blur*2+1), 0)
+                corrected_input = blurred_input * input_mask_3channel + corrected_input * (1 - input_mask_3channel)
 
             # Create a combined mask that is the intersection of input and output face masks
             combined_mask = input_mask_3channel * output_mask_3channel
 
-            # Apply face opacity to the input face, but only within the output face area
-            face_overlay = input_np * combined_mask * face_opacity
+            # Apply face opacity to the color-corrected input face, but only within the output face area
+            face_overlay = corrected_input * combined_mask * face_opacity
 
             # Blend the face overlay with the output image
             blended = face_overlay + output_np * (1 - combined_mask * face_opacity)
@@ -217,8 +232,8 @@ class Predictor(BasePredictor):
     self,
     prompt: str = Input(description="Prompt to generate images from"),
     image: Path = Input(description="Grayscale input image"),
-    gaussian_radius: int = Input(description="Gaussian blur radius", default=8),
-    face_opacity: float = Input(description="Opacity of the face overlay (0.0 to 1.0)", default=0.7),
+    gaussian_radius: int = Input(description="Gaussian blur radius", default=12),
+    face_opacity: float = Input(description="Opacity of the face overlay (0.0 to 1.0)", default=0.65),
     face_blur: int = Input(description="Radius for Gaussian blur applied to the pasted faces (0 for no blur)", default=1),
 ) -> str:
         """Run a single prediction on the model"""
@@ -235,7 +250,7 @@ class Predictor(BasePredictor):
         out = self.pipe(
             input_prompt,
             poses,
-            negative_prompt=["worst quality, low quality"],
+            negative_prompt=["naked, boobs, tits, nsfw, monochrome, lowres, bad anatomy, worst quality, low quality"],
             generator=generator,
             num_inference_steps=20,
         )
@@ -262,16 +277,10 @@ class Predictor(BasePredictor):
 
         # save the final image
         cv2.imwrite("final.jpg", swapped_image)
+    
+        # encode the final image
+        with open("final.jpg", "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read())
+            
 
-        if swapped_image:
-             # convert to base64
-            with open(swapped_image, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read())
-
-            # return base64 in an array
-            return str([encoded_string.decode("utf-8")])
-        else:
-            with open("output.png", "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read())
-
-            return str([encoded_string.decode("utf-8")])
+        return str([encoded_string.decode("utf-8")])
