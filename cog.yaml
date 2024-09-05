@@ -57,4 +57,4 @@ build:
 
 # predict.py defines how predictions are run on your model
 predict: "predict.py:Predictor"
-image: yassinsiouda/cog-controlnet:roop
+image: yassinsiouda/cog-controlnet:roopSn

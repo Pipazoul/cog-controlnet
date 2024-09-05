@@ -301,4 +301,4 @@ class Predictor(BasePredictor):
             encoded_string = base64.b64encode(image_file.read())
             
 
-        #return str([encoded_string.decode("utf-8")])
+        return str([encoded_string.decode("utf-8")])
