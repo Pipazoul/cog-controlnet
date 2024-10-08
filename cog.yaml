@@ -8,8 +8,15 @@ build:
 
   # a list of ubuntu apt packages to install
   system_packages:
-    - "libgl1-mesa-glx"
-    - "libglib2.0-0"
+    - libgl1-mesa-glx
+    - libglib2.0-0
+
+    - cmake
+    - zip
+    - ffmpeg
+    - libsm6 
+    - libxext6
+    - gcc-10
 
   # python version in the form '3.11' or '3.11.4'
   python_version: "3.11"
@@ -27,6 +34,11 @@ build:
     - "xformers"
     - "mediapipe"
     - "huggingface_hub"
+
+    - "insightface"
+    - "onnxruntime-gpu"
+    - "pydantic==1.10.13"
+    - "tensorrt"
   #   - "torch==1.8.0"
   #   - "torchvision==0.9.0"
 
@@ -34,7 +46,15 @@ build:
   run:
     - "echo env is ready!"
     - "echo another command if needed"
-    - "python scripts/download-weights.py"
+    #- "python scripts/download-weights.py"
+    - "pip install torchvision"
+    - "pip install basicsr"
+    - "pip install gfpgan"
+    - "mkdir -p /root/.insightface/models/buffalo_l/"
+    - "wget https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+    - "unzip buffalo_l.zip -d /root/.insightface/models/buffalo_l"
+    - "pip install numpy==1.26.4"
 
 # predict.py defines how predictions are run on your model
 predict: "predict.py:Predictor"
+image: yassinsiouda/cog-controlnet:roopSn
