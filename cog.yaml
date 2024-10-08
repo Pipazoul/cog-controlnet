@@ -23,14 +23,14 @@ build:
 
   # a list of packages in the format <package-name>==<version>
   python_packages:
-    - "torch==2.0.1"
-    - "transformers==4.31.0"
-    - "diffusers==0.19.3"
-    - "accelerate==0.21.0"
-    - "safetensors==0.3.2"
-    - "controlnet_aux==0.0.6"
-    - "matplotlib==3.7.2"
-    - "mediapipe==0.10.3"
+    - "torch"
+    - "transformers"
+    - "diffusers"
+    - "accelerate"
+    - "safetensors"
+    - "controlnet_aux"
+    - "matplotlib"
+    - "mediapipe"
     - "xformers"
     - "mediapipe"
     - "huggingface_hub"

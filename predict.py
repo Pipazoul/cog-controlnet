@@ -2,7 +2,7 @@
 # https://github.com/replicate/cog/blob/main/docs/python.md
 import torch
 from diffusers.utils import load_image
-from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel
 from diffusers import UniPCMultistepScheduler
 from controlnet_aux import OpenposeDetector
 from PIL import Image
@@ -30,8 +30,8 @@ import tempfile
 import time
 
 MODEL = "lllyasviel/ControlNet"
-CONTROLNET = "fusing/stable-diffusion-v1-5-controlnet-openpose"
-MODEL_ID = "Lykon/AbsoluteReality"
+CONTROLNET = "thibaud/controlnet-openpose-sdxl-1.0"
+MODEL_ID = "Lykon/dreamshaper-xl-lightning"
 
 CONTROLNET_CACHE = "control-cache"
 MODEL_CACHE = "model-cache"
@@ -56,7 +56,7 @@ class Predictor(BasePredictor):
             cache_dir=CONTROLNET_CACHE,
             torch_dtype=torch.float16
         )
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
+        self.pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
             MODEL_ID,
             cache_dir=MODEL_ID_CACHE,
             controlnet=self.controlnet,
@@ -266,11 +266,12 @@ class Predictor(BasePredictor):
         generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
         input_prompt = [prompt]
         out = self.pipe(
-            input_prompt,
-            poses,
+            prompt=input_prompt,
+            image=poses,
             negative_prompt=["naked, boobs, tits, nsfw, monochrome, lowres, bad anatomy, worst quality, low quality"],
             generator=generator,
-            num_inference_steps=20,
+            guidance_scale=2,
+            num_inference_steps=4,
         )
         out_image = out.images[0]
 
@@ -299,6 +300,10 @@ class Predictor(BasePredictor):
         # encode the final image
         with open("final.jpg", "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read())
-            
 
-        return str([encoded_string.decode("utf-8")])
+        # return base64 in an array
+        #return str([encoded_string.decode("utf-8")])
+
+
+
+
