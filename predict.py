@@ -3,7 +3,7 @@
 import torch
 from diffusers.utils import load_image
 from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel
-from diffusers import UniPCMultistepScheduler
+from diffusers import UniPCMultistepScheduler, EulerAncestralDiscreteScheduler
 from controlnet_aux import OpenposeDetector
 from PIL import Image
 
@@ -31,7 +31,7 @@ import time
 
 MODEL = "lllyasviel/ControlNet"
 CONTROLNET = "thibaud/controlnet-openpose-sdxl-1.0"
-MODEL_ID = "Lykon/dreamshaper-xl-lightning"
+MODEL_ID = "John6666/juggernaut-xl-rundiffusion-hyper-sdxl"
 
 CONTROLNET_CACHE = "control-cache"
 MODEL_CACHE = "model-cache"
@@ -63,7 +63,14 @@ class Predictor(BasePredictor):
             torch_dtype=torch.float16,
         )
         self.pipe.to("cuda")
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
+
+        eulera_scheduler = EulerAncestralDiscreteScheduler.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0", 
+            subfolder="scheduler",
+            cache_dir="cache"
+        )
+        self.pipe.scheduler = eulera_scheduler
+        #self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
         self.pipe.enable_model_cpu_offload()
         self.pipe.enable_xformers_memory_efficient_attention()
 
@@ -261,6 +268,11 @@ class Predictor(BasePredictor):
 
         # Get poses using the Openpose model
         poses = self.model(pil_image)
+        
+        height, width, _  = np.array(pil_image).shape
+        ratio = np.sqrt(1024. * 1024. / (width * height))
+        new_width, new_height = int(width * ratio), int(height * ratio)
+                
 
         # Generate the initial image based on the prompt and poses
         generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
@@ -268,10 +280,13 @@ class Predictor(BasePredictor):
         out = self.pipe(
             prompt=input_prompt,
             image=poses,
+            width=new_width,
+            height=new_height,
             negative_prompt=["naked, boobs, tits, nsfw, monochrome, lowres, bad anatomy, worst quality, low quality"],
             generator=generator,
-            guidance_scale=2,
-            num_inference_steps=4,
+            num_inference_steps=10,
+            #set cfg scale 1
+            controlnet_conditioning_scale=0.9,
         )
         out_image = out.images[0]
 
