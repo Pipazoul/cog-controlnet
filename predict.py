@@ -253,6 +253,9 @@ class Predictor(BasePredictor):
     gaussian_radius: int = Input(description="Gaussian blur radius", default=12),
     face_opacity: float = Input(description="Opacity of the face overlay (0.0 to 1.0)", default=0.65),
     face_blur: int = Input(description="Radius for Gaussian blur applied to the pasted faces (0 for no blur)", default=1),
+    seed: int = Input(description="Seed", default=-1),
+    negative_prompt: str = Input(description="Negative Prompt" , default="naked, boobs, tits, nsfw, monochrome, lowres, bad anatomy, worst quality, low quality"),
+
 ) -> str:
         """Run a single prediction on the model"""
 
@@ -262,13 +265,16 @@ class Predictor(BasePredictor):
         # Get poses using the Openpose model
         poses = self.model(pil_image)
 
+        if seed == -1 :
+            seed = random.randint(0, 1000000000)
+        
         # Generate the initial image based on the prompt and poses
-        generator = torch.Generator("cuda").manual_seed(random.randint(0, 1000000000))
+        generator = torch.Generator("cuda").manual_seed(seed)
         input_prompt = [prompt]
         out = self.pipe(
             input_prompt,
             poses,
-            negative_prompt=["naked, boobs, tits, nsfw, monochrome, lowres, bad anatomy, worst quality, low quality"],
+            negative_prompt=[negative_prompt],
             generator=generator,
             num_inference_steps=20,
         )
