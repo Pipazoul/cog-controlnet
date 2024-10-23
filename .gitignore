@@ -3,3 +3,12 @@ model-id-cache/*
 __pycache__/*
 .gitignore
 control-cache/*
+cache/*
+.cog
+cog-controlnet
+*.png
+*.jpg
+*.webp
+*.tflite
+*.tar.gz
+gfpgan
